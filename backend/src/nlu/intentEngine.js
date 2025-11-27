@@ -1,7 +1,8 @@
 module.exports.detectIntent = (text) => {
   text = text.toLowerCase();
 
-  if (/buy|order|price|cart|hoodie|tshirt/.test(text))
+  // add hoodies & tshirts
+  if (/buy|order|price|cart|hoodie|hoodies|tshirt|tshirts/.test(text))
     return { intent: "product_search", confidence: 0.9 };
 
   if (/book|meeting|schedule|remind/.test(text))
