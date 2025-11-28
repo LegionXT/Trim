@@ -16,12 +16,17 @@ async function getMemory(userId) {
  * Record a user message + intent + optional entities
  */
 async function recordUserMessage(userId, text, intent = null, entities = {}) {
+  console.log("Intent logged:", intent);
   const mem = await getMemory(userId);
   mem.pushMessage("user", text);
+   
+  // 🔥 FIXED INTENT LOGGING HERE
   if (intent) {
+    if (!mem.last_intents) mem.last_intents = [];
     mem.last_intents.push(intent);
-    if (mem.last_intents.length > 10) mem.last_intents.shift(); // keep small
+    mem.last_intents = mem.last_intents.slice(-20); // keep last 20
   }
+  
   mem.recent_entities = { ...mem.recent_entities, ...entities };
   mem.updatedAt = new Date();
   await mem.save();

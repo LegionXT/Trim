@@ -12,6 +12,16 @@ app.use(cors());
 // routes
 app.use("/webhook", require("./routes/webhook"));
 
+const adminTicketRoutes = require("./routes/adminTickets");
+app.use("/admin/tickets", adminTicketRoutes);
+
+// 👉 ADD CONVERSATION API ROUTES HERE ...
+const conversationRoutes = require("./routes/conversations");
+app.use("/admin/conversations", conversationRoutes);
+
+const analyticsRoutes = require("./routes/analytics");
+app.use("/admin/analytics", analyticsRoutes);
+
 // DB connect
 mongoose
   .connect(process.env.MONGO_URI)

@@ -3,6 +3,7 @@ const ecommerce = require("../agents/ecommerce");
 const productivity = require("../agents/productivity");
 const support = require("../agents/support");
 const memoryService = require("../services/memoryService");
+const Conversation = require("../models/Conversation");
 
 module.exports.handleMessage = async (req, res) => {
   try {
@@ -10,74 +11,95 @@ module.exports.handleMessage = async (req, res) => {
 
     console.log("Incoming:", message);
 
-    if (!userId || !message) return res.status(400).json({ text: "Missing userId or message" });
+    if (!userId || !message)
+      return res.status(400).json({ text: "Missing userId or message" });
 
-    // --- Quick reset command ---
-  if (message.toLowerCase() === "reset") {
-  await memoryService.clearState(userId);
-  return res.json({ text: "Memory cleared ✔️ Start fresh!" });
-  }
+    // RESET
+    if (message.toLowerCase() === "reset") {
+      await memoryService.clearState(userId);
+      return res.json({ text: "Memory cleared ✔️ Start fresh!" });
+    }
 
     const mem = await memoryService.getMemory(userId);
 
-   
-    // If waiting on a field, handle it first
-  if (mem?.awaiting?.field) {
-  const field = mem.awaiting.field;
+    // ---------------- HANDLE AWAITING STATES ----------------
+    if (mem?.awaiting?.field) {
+      const field = mem.awaiting.field;
 
-  // ecommerce handlers
-  if (field === "size") {
-    const reply = await ecommerce.handleSizeSelection(message, userId);
-    await memoryService.recordBotMessage(userId, reply.text);
-    return res.json(reply);
-  }
+      // Correct handler order (message, userId)
+      const handlers = {
+        size: (msg, uid) => ecommerce.handleSizeSelection(msg, uid),
+        confirm_checkout: (msg, uid) => ecommerce.handleCheckout(uid, msg), // checkout expects (userId, answer)
+        payment: (msg, uid) => ecommerce.processPayment(uid, msg),         // payment expects (userId, message)
+        meeting_date: (msg, uid) => productivity.handleDate(uid, msg),
+        meeting_time: (msg, uid) => productivity.handleTime(uid, msg),
+        meeting_duration: (msg, uid) => productivity.handleDuration(uid, msg)
+      };
 
-  if (field === "confirm_checkout") {
-    const reply = await ecommerce.handleCheckout(userId, message);
-    await memoryService.recordBotMessage(userId, reply.text);
-    return res.json(reply);
-  }
+      if (handlers[field]) {
+        const reply = await handlers[field](message, userId);
 
-  if (field === "payment") {
-    const reply = await ecommerce.processPayment(userId, message);
-    await memoryService.recordBotMessage(userId, reply.text);
-    return res.json(reply);
-  }
+        // record + save bot reply
+        await memoryService.recordBotMessage(userId, reply.text);
 
-  // productivity handlers
-  if (field === "meeting_date") {
-    const reply = await productivity.handleDate(userId, message);
-    await memoryService.recordBotMessage(userId, reply.text);
-    return res.json(reply);
-  }
+        let convoBot = await Conversation.findOne({ userId });
+        if (!convoBot) convoBot = new Conversation({ userId, messages: [] });
 
-  if (field === "meeting_time") {
-    const reply = await productivity.handleTime(userId, message);
-    await memoryService.recordBotMessage(userId, reply.text);
-    return res.json(reply);
-  }
+        convoBot.messages.push({ from: "bot", text: reply.text });
+        convoBot.lastUpdated = new Date();
+        await convoBot.save();
 
-  if (field === "meeting_duration") {
-    const reply = await productivity.handleDuration(userId, message);
-    await memoryService.recordBotMessage(userId, reply.text);
-    return res.json(reply);
-  }
-}
+        return res.json(reply);
+      }
+    }
+    // ---------------------------------------------------------
 
-
-
-
-    // Normal NLU path
+    // ------------------ NLU PATH ------------------
     const { intent, entities } = detectIntent(message);
     await memoryService.recordUserMessage(userId, message, intent, entities);
+    // ------------------------------------------------
 
+    // -------- SAVE USER MESSAGE WITH INTENT --------
+    let convo = await Conversation.findOne({ userId });
+    if (!convo) convo = new Conversation({ userId, messages: [] });
+
+    convo.messages.push({
+      from: "user",
+      text: message,
+      intent
+    });
+    convo.lastUpdated = new Date();
+    await convo.save();
+    // -----------------------------------------------
+
+    // ---------------- ROUTE TO AGENT ----------------
     let reply;
-    if (intent === "product_search") reply = await ecommerce.handle(message, userId);
-    else if (intent === "schedule_meeting") reply = await productivity.handle(message, userId);
-    else if (intent === "support_issue") reply = await support.handle(message, userId);
-    else reply = { text: "I'm not sure I understood that. Can you clarify?" };
 
+    if (intent === "product_search") {
+      reply = await ecommerce.handle(message, userId);
+
+    } else if (intent === "schedule_meeting") {
+      reply = await productivity.handle(message, userId);
+
+    } else if (intent === "support_issue") {
+      reply = await support.handle(message, userId);
+
+    } else {
+      reply = { text: "I'm not sure I understood that. Can you clarify?" };
+    }
+    // ------------------------------------------------
+
+    // record bot message
     await memoryService.recordBotMessage(userId, reply.text);
+
+    // SAVE BOT MESSAGE
+    let convoBot = await Conversation.findOne({ userId });
+    if (!convoBot) convoBot = new Conversation({ userId, messages: [] });
+
+    convoBot.messages.push({ from: "bot", text: reply.text });
+    convoBot.lastUpdated = new Date();
+    await convoBot.save();
+
     return res.json(reply);
 
   } catch (err) {
